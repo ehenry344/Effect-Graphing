@@ -3,21 +3,33 @@ local RunService = game:GetService("RunService")
 local Settings = require(script.Parent.Settings)
 local Offsets = Settings.Graph.Offsets
 
+local GraphFrame = script.Parent.MainFrame.Graph
+
+-- Proportionality Constants 
+
+-- X / Y Scale (Point)
+local X_SC = (Settings.Graph.Sizes.Point[1] / GraphFrame.AbsoluteSize.X) / 2 
+local Y_SC = (Settings.Graph.Sizes.Point[2] / GraphFrame.AbsoluteSize.Y) / 2
+
+-- X / Y Scale (Moveable Point) 
+local X_SCM = (Settings.Graph.Sizes.Moveable[1] / GraphFrame.AbsoluteSize.X) / 4
+local Y_SCM = (Settings.Graph.Sizes.Moveable[2] / GraphFrame.AbsoluteSize.Y) / 4
+	
+-- X / Y Proportionality
+local X_PC = 1 - (Offsets.X.Start + Offsets.X.End) 
+local Y_PC = 1 - (Offsets.Y.Start + Offsets.Y.End)
+
+
 local Graph = {}
 Graph.__index = Graph
 
-function Graph.New(graphFrame, showEndBounds) 
-	local self = {
-		Frame = graphFrame, 
-		
-		Points = {}, 
+function Graph.New(showEndBounds) 
+	local self = {		
+		Waveforms = {}, 
 		Axis = {},
 		Intervals = {}, 
-		
-		Moveables = {}
+		Connections = {}
 	}
-	
-	-- render the graph
 	
 	-- X Axis
 	local xAxis = Instance.new("Frame")
@@ -43,8 +55,8 @@ function Graph.New(graphFrame, showEndBounds)
 	
 	self.Axis["y"] = yAxis
 	
-	xAxis.Parent = self.Frame
-	yAxis.Parent = self.Frame
+	xAxis.Parent = GraphFrame
+	yAxis.Parent = GraphFrame
 	
 	if Settings.Graph.ShowAllBounds then 
 		self.EndBounds = {}
@@ -71,8 +83,8 @@ function Graph.New(graphFrame, showEndBounds)
 		
 		self.EndBounds["y"] = yEnd 
 		
-		xEnd.Parent = self.Frame
-		yEnd.Parent = self.Frame
+		xEnd.Parent = GraphFrame
+		yEnd.Parent = GraphFrame 
 	end
 	
 	setmetatable(self, Graph)
@@ -89,6 +101,10 @@ function Graph:_renderIntervals()
 	
 	local yModifier = Settings.Graph.Intervals.Y * Offsets.Y.Start
 	local yCorrection = ((yModifier - (Offsets.Y.Start - Offsets.Y.End)) / Settings.Graph.Intervals.Y) - Offsets.Y.Start
+	
+	local xFolder = Instance.new("Folder")
+	xFolder.Name = "XIntervals"
+	xFolder.Parent = GraphFrame
 	
 	--X Intervals	
 	for intervalX = 1, Settings.Graph.Intervals.X-1 do 
@@ -110,8 +126,12 @@ function Graph:_renderIntervals()
 		
 		table.insert(self.Intervals, interval)
 		
-		interval.Parent = self.Frame
+		interval.Parent = xFolder
 	end
+	
+	local yFolder = Instance.new("Folder") 
+	yFolder.Name = "YIntervals"
+	yFolder.Parent = GraphFrame
 	
 	--Y Intervals
 	for intervalY = 1, Settings.Graph.Intervals.Y-1 do
@@ -133,7 +153,7 @@ function Graph:_renderIntervals()
 		
 		table.insert(self.Intervals, interval)
 		
-		interval.Parent = self.Frame
+		interval.Parent = yFolder
 	end
 end
 
@@ -143,58 +163,62 @@ local function genPointTemplate()
 	template.Name = "2DPT" -- Abbrev. 2 Dimensional Point
 	template.BorderSizePixel = 0
 	template.Size = UDim2.fromOffset(table.unpack(Settings.Graph.Sizes.Point))
-	template.BackgroundColor3 = Settings.Graph.Colors.Point
 	template.ZIndex = 2
 	
 	return template
 end
 
-function Graph:RenderWaveform(display, features)
-	-- cached to eliminate redundant calculations
-	local xScaleOffset = (Settings.Graph.Sizes.Point[1] / self.Frame.AbsoluteSize.X) / 2
-	local yScaleOffset = (Settings.Graph.Sizes.Point[2] / self.Frame.AbsoluteSize.Y) / 2
+local function genLineTemplate()
+	local template = Instance.new("Frame")
 	
-	local xPropConstant = (1 - (Offsets.X.Start + Offsets.X.End))
-	local yPropConstant = (1 - (Offsets.Y.Start + Offsets.Y.End))
+	template.Name = "2DLine"
+	template.BorderSizePixel = 0
+	template.ZIndex = 2
 	
+	return template
+end
+
+function Graph:RenderWaveform(display, features)		
 	local templatePoint = genPointTemplate()
+	templatePoint.BackgroundColor3 = display.Color 
 	
-	local renderedPoints = {}
+	local pointFolder = Instance.new("Folder") 
+	pointFolder.Parent = GraphFrame
 	
 	for x = 0, features.Period, features.Step do 
-		local xPos = (((x / features.Period) * xPropConstant) - xScaleOffset) + Offsets.X.Start
-		local yPos = 1 - ((((features.Waveform(x) / features.YMax) * yPropConstant) - yScaleOffset) + Offsets.Y.Start)
+		local xPos = (((x / features.Period) * X_PC) - X_SC) + Offsets.X.Start
+		local yPos = 1 - ((((features.Waveform(x) / features.YMax) * Y_PC) - Y_SC) + Offsets.Y.Start)
 		
-		if yPos <= 0 or yPos >= 1 then -- Point outside of buondaries
+		if yPos <= 0 or yPos >= 1 then -- Point lying outside of frame... discard
 			continue
 		end
 		
 		local point = templatePoint:Clone()
-		point.BackgroundColor3 = display.Color
 		
 		point.Position = UDim2.fromScale(xPos, yPos)
-		
-		table.insert(renderedPoints, point)
-		
-		point.Parent = self.Frame
-	end
-		
-	if self.Points[display.Name] then 
-		local waveIndex = 0
-		while self.Points[display.Name..waveIndex] do 
-			waveIndex += 1
-		end
-		display.Name ..= waveIndex
+		point.Parent = pointFolder
 	end
 	
-	self.Points[display.Name] = renderedPoints
+	-- Wave Naming / Storage
+	
+	local waveName = display.Name
+	
+	if self.Waveforms[waveName] then 
+		-- Retry names until a unique one is found
+		local waveIndex = 0
+		while self.Waveforms[waveName..waveIndex] do 
+			waveIndex += 1
+		end
+		waveName ..= waveIndex
+	end
+	
+	pointFolder.Name = waveName
+	self.Waveforms[waveName] = pointFolder
+	
+	-- Cleanup 
 	
 	templatePoint:Destroy()
 	templatePoint = nil
-end
-
-function Graph:AddMoveable()
-	
 end
 
 return Graph
